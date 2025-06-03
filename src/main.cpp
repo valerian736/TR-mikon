@@ -1,65 +1,112 @@
+#include <Arduino.h>
 #include <Wire.h>
-#include <MPU6050.h>
+#include <SoftwareSerial.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
-#include <Wire.h>
-Adafruit_MPU6050 mpu;
-bool crashDetected = false;
-const int crashThreshold = 20; // Adjust this value based on your needs
-MPU6050 mpu6050;
 
-void setup()
-{
+Adafruit_MPU6050 mpu;
+
+const float crashThreshold = 20.0;
+bool crashDetected = false;
+bool crashNotified = false;
+
+SoftwareSerial sim800l(4, 3); 
+
+float prevAx = 0, prevAy = 0, prevAz = 0;
+float lat = 0.0, lon = 0.0; // Placeholder for GPS coordinates
+
+void sendMessage(String message);
+void updateSerial();
+
+void setup() {
   pinMode(11, OUTPUT);
+  sim800l.begin(9600);
   Serial.begin(9600);
-  
+
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(10);
-    }
+    while (1) delay(10);
   }
 
   mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
   mpu.setGyroRange(MPU6050_RANGE_250_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  Serial.println("");
   delay(100);
 
   attachInterrupt(digitalPinToInterrupt(2), []() {
-    crashDetected = false; // Reset crash detection on interrupt
-  }, RISING); // Change to FALLING if needed
+    crashDetected = false;
+    crashNotified = false;
+  }, RISING);
 }
 
-void loop()
-{
+void loop() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  long totalAcceleration = (float)a.acceleration.x * a.acceleration.x + (float)a.acceleration.y * a.acceleration.y;
-  long acceleration = sqrt(totalAcceleration);
-  if (acceleration > crashThreshold)
-  {
-    Serial.println("Crash detected! \t Total acceleration: " + String(acceleration));
+  float ax = a.acceleration.x;
+  float ay = a.acceleration.y;
+  float az = a.acceleration.z;
+
+  float deltaAx = ax - prevAx;
+  float deltaAy = ay - prevAy;
+  float deltaAz = az - prevAz;
+
+  float vSum = sqrt(deltaAx * deltaAx + deltaAy * deltaAy + deltaAz * deltaAz);
+
+  prevAx = ax;
+  prevAy = ay;
+  prevAz = az;
+
+  if (vSum > crashThreshold) {
     crashDetected = true;
-
-  }
-  else{
-    Serial.print("Acceleration: " + String(acceleration));
-    Serial.print(" \t X: " + String(a.acceleration.x) + " \t Y: " + String(a.acceleration.y) + " \t Z: " + String(a.acceleration.z));
-    Serial.println();
-  }
-
-  if (crashDetected)
-  {
-    tone(11, 30000); 
-  }
-  else
-  {
-    noTone(11); 
+    if (!crashNotified) {
+      String message = "Crash Detected!\n lat = " + String(lat) + " lon = " + String(lon);
+      sendMessage(message);
+      crashNotified = true;
+    }
+  } else {
+    Serial.print(" a: "); Serial.print(vSum);
+    Serial.print(" | X: "); Serial.print(ax);
+    Serial.print(" Y: "); Serial.print(ay);
+    Serial.print(" Z: "); Serial.println(az);
   }
 
-  
+  if (crashDetected) {
+    tone(11, 3000, 3000);
+  } else {
+    noTone(11);
+  }
 
   delay(100);
+}
+
+void sendMessage(String message) {
+  delay(1000);
+  sim800l.println("AT");
+  updateSerial();
+
+  sim800l.println("AT+CMEE=1");
+  updateSerial();
+
+  sim800l.println("AT+CMGF=1");
+  updateSerial();
+
+  sim800l.println("AT+CMGS=\"+628996970405\"");  // Replace with real number
+  updateSerial();
+
+  sim800l.print(message);
+  updateSerial();
+
+  sim800l.write(26);  // CTRL+Z to send
+  updateSerial();
+}
+
+void updateSerial() {
+  delay(500);
+  while (Serial.available()) {
+    sim800l.write(Serial.read());
+  }
+  while (sim800l.available()) {
+    Serial.write(sim800l.read());
+  }
 }
