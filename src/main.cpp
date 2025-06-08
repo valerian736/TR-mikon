@@ -5,24 +5,26 @@
 #include <Adafruit_Sensor.h>
 #include <TinyGPS++.h>
 #include <stdio.h>
-// int uart_putchar(char c, FILE *stream) { return Serial.write(c); }
-// PROGMEM const char str1[] = "Format str from flash\nlong = %15ld\nFlash string = %10S\n";
+
 Adafruit_MPU6050 mpu;
 TinyGPSPlus gps;
-const float crashT = 20.0;
+const float crashT = 5.0;
 const int timeT = 500;
 bool crashDetected = false;
 bool crashNotified = false;
+bool gpsConnected = false;
 unsigned long crashDetectionTime = 0;
+unsigned long lastGPSCheck = 0;
 
 SoftwareSerial sim800l(4, 3);
-SoftwareSerial gpsSerial(5, 6);
+SoftwareSerial gpsSerial(8, 9);
 
 float prevAx = 0, prevAy = 0, prevAz = 0;
-float lat = 0.0, lon = 0.0;
+double lat = 0, lon = 0;
 
 void sendMessage(String message);
 void updateSerial();
+void updateGPS();
 
 PROGMEM const char message[] = "Format str from flash\nlong = %15ld\nFlash string = %10S\n";
 
@@ -33,25 +35,20 @@ ISR(INT0_vect)
 
 void setup()
 {
-
   pinMode(11, OUTPUT);
   sim800l.begin(9600);
+  
+  // Try different baud rates for GPS
   gpsSerial.begin(9600);
   Serial.begin(9600);
-
-  // attachInterrupt(digitalPinToInterrupt(2), []()
-  //                 { crashDetected = false; }, FALLING);
+  
+  // Give GPS module time to initialize
+  Serial.println("Initializing GPS...");
+  delay(2000);
 
   PORTD |= (1 << PD2);
   EICRA |= (1 << ISC01);
   EIMSK |= (1 << INT0);
-
-  // TCCR1A = 0;
-  // TCCR1B = 0;
-  // TCCR1B |= (1 << WGM12);
-  // TCCR1B |= (1 << CS12);
-  // OCR1A = 625;
-  // TIMSK1 |= (1 << OCIE1A);
   sei();
 
   if (!mpu.begin())
@@ -65,10 +62,14 @@ void setup()
   mpu.setGyroRange(MPU6050_RANGE_250_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   delay(100);
+  
+  Serial.println("System initialized. Waiting for GPS fix...");
 }
 
 void loop()
 {
+  // Update GPS more frequently
+  updateGPS();
 
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
@@ -87,14 +88,27 @@ void loop()
   prevAy = ay;
   prevAz = az;
 
-  Serial.print(" a: ");
-  Serial.print(vSum);
-  Serial.print(" | X: ");
-  Serial.print(ax);
-  Serial.print(" Y: ");
-  Serial.print(ay);
-  Serial.print(" Z: ");
-  Serial.println(az);
+  // Print debug info every 2 seconds to avoid spam
+  if (millis() - lastGPSCheck > 2000) {
+    Serial.print("Accel: ");
+    Serial.print(vSum);
+    Serial.print(" | X: ");
+    Serial.print(ax);
+    Serial.print(" Y: ");
+    Serial.print(ay);
+    Serial.print(" Z: ");
+    Serial.print(az);
+    Serial.print(" | GPS: ");
+    Serial.print(gpsConnected ? "Connected" : "Searching...");
+    Serial.print(" | Sats: ");
+    Serial.print(gps.satellites.value());
+    Serial.print(" | Lat: ");
+    Serial.print(lat, 6);
+    Serial.print(" Lon: ");
+    Serial.println(lon, 6);
+    
+    lastGPSCheck = millis();
+  }
 
   if (vSum > crashT)
   {
@@ -107,8 +121,14 @@ void loop()
     {
       crashDetected = true;
       Serial.println("Crash detected, sending message...");
-      sendMessage("Crash Detected! https://www.google.com/maps/search/?api=1&query=" + String(lat) + "," + String(lon));
-
+      
+      // Only send message if we have valid GPS coordinates
+      if (gpsConnected && lat != 0 && lon != 0) {
+        sendMessage("Crash Detected! Location: https://www.google.com/maps/search/?api=1&query=" + String(lat, 6) + "," + String(lon, 6));
+      } else {
+        sendMessage("Crash Detected! GPS location not available.");
+      }
+      
       crashDetectionTime = 0;
     }
   }
@@ -122,6 +142,8 @@ void loop()
     noTone(11);
     crashNotified = false;
   }
+  
+  delay(100); // Small delay to prevent overwhelming the system
 }
 
 void sendMessage(String message)
@@ -151,5 +173,25 @@ void updateSerial()
   while (sim800l.available())
   {
     Serial.write(sim800l.read());
+  }
+}
+
+void updateGPS() {
+  // Process all available GPS data
+  while (gpsSerial.available() > 0) {
+    char c = gpsSerial.read();
+    if (gps.encode(c)) {
+      // New sentence processed
+      if (gps.location.isValid()) {
+        gpsConnected = true;
+        lat = gps.location.lat();
+        lon = gps.location.lng();
+      }
+    }
+  }
+  
+  // Check if GPS data is stale (no updates for 5 seconds)
+  if (gps.location.age() > 5000) {
+    gpsConnected = false;
   }
 }
