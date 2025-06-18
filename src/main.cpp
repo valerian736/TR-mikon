@@ -6,7 +6,7 @@ static const int RXPin = 8, TXPin = 9;
 double lat, lon;
 bool gpsConnected;
 volatile bool crashDetected;
-// The TinyGPS++ object
+
 TinyGPSPlus gps;
 
 float AccX, AccY, AccZ;
@@ -18,7 +18,7 @@ int tThreshold = 500;
 
 bool buttonPressed = false;
 
-// The serial connection to the GPS device
+
 SoftwareSerial gpsSerial(RXPin, TXPin);
 SoftwareSerial gsmSerial(4, 3);
 
@@ -46,15 +46,15 @@ void updateSerial()
 
 void sendMessage(String message)
 {
-  gsmSerial.println("AT"); // Once the handshake test is successful, it will back to OK
+  gsmSerial.println("AT"); 
   updateSerial();
   gsmSerial.println("AT+CMEE=2");
   updateSerial();
-  gsmSerial.println("AT+CMGF=1"); // Configuring TEXT mode
+  gsmSerial.println("AT+CMGF=1"); 
   updateSerial();
   gsmSerial.println("AT+CMGS=\"+628996970405\"");
   updateSerial();
-  gsmSerial.print(message); // text content
+  gsmSerial.print(message); 
   updateSerial();
   gsmSerial.write(26);
 }
@@ -88,21 +88,21 @@ void updateGPS()
 void update_acc(void)
 {
   Wire.beginTransmission(0x68);
-  Wire.write(0x1A);
+  Wire.write(0x1A);//CONFIG
   Wire.write(0x05);
   Wire.endTransmission();
   Wire.beginTransmission(0x68);
-  Wire.write(0x1C);
-  Wire.write(0x18);
+  Wire.write(0x1C);//ACCEL_CONFIG
+  Wire.write(0x18); // 16g
   Wire.endTransmission();
   Wire.beginTransmission(0x68);
-  Wire.write(0x3B);
+  Wire.write(0x3B);//ACCEL_XOUT_H 
   Wire.endTransmission();
-  Wire.requestFrom(0x68, 6);
+  Wire.requestFrom(0x68, 6); // ngirim 2 part H, L abis itu dijadiin jadi
   int16_t AccXLSB = Wire.read() << 8 | Wire.read();
   int16_t AccYLSB = Wire.read() << 8 | Wire.read();
   int16_t AccZLSB = Wire.read() << 8 | Wire.read();
-
+  //2 ^ 16 = 65536/32 -> 32 dari total range +- 16g
   AccX = ((float)AccXLSB / 2048) * 9.8;
   AccY = ((float)AccYLSB / 2048) * 9.8;
   AccZ = ((float)AccZLSB / 2048) * 9.8;
@@ -113,8 +113,8 @@ void mpu_begin()
   Wire.begin();
   delay(250);
   Wire.beginTransmission(0x68);
-  Wire.write(0x6B);
-  Wire.write(0x00);
+  Wire.write(0x6B); //PWR_MGMT_1
+  Wire.write(0x00);// writes value to register
   Wire.endTransmission();
 }
 
@@ -125,6 +125,7 @@ void setup()
   gpsSerial.begin(9600);
   gsmSerial.begin(9600);
   pinMode(11, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
   PORTD |= (1 << PD2);
   EICRA |= (1 << ISC01);
   EIMSK |= (1 << INT0);
@@ -160,7 +161,7 @@ void loop()
     {
       crashDetected = true;
       Serial.println("Crash detected, sending message...");
-      messageTimer = millis();
+      
 
       if (lat != 0 && lon != 0)
       {
@@ -183,10 +184,12 @@ void loop()
 
   if (crashDetected)
   {
-    tone(11, 1000);
+    tone(11, 2000);
+    digitalWrite(LED_BUILTIN, HIGH);
   }
   else
   {
     noTone(11);
+    digitalWrite(LED_BUILTIN, LOW);
   }
 }
